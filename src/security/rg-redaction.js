@@ -46,6 +46,7 @@ const applyDocumentLevelPemRedaction = (content) => {
 const RG_WARNING_CODE = 'rg-redaction-unavailable'
 const DROP_REASON_PAYMENT_KEYWORD_AND_CARD_NUMBER = 'payment-keyword-and-card-number'
 const DROP_REASON_CRYPTO_SEED_PHRASE = 'crypto-seed-phrase'
+const DROP_REASON_REDACTION_UNAVAILABLE = 'redaction-scanner-unavailable'
 
 function noop () {}
 
@@ -145,6 +146,13 @@ const collectCandidateLineIndexes = async ({ rgBinaryPath, content }) => {
 
     child.on('error', (error) => {
       reject(new Error(`Failed to start rg redaction scanner: ${error.message}`))
+    })
+    // A scanner that exits early can close stdin before Node finishes writing.
+    // Without this handler EPIPE becomes an unhandled process exception.
+    child.stdin.on('error', (error) => {
+      if (error?.code !== 'EPIPE') {
+        reject(new Error(`Failed to stream redaction input: ${error.message}`))
+      }
     })
 
     child.on('close', (code, signal) => {
@@ -339,18 +347,18 @@ const scanAndRedactContent = async ({
       code: RG_WARNING_CODE,
       fileType,
       fileIdentifier,
-      message: 'RG binary unavailable for redaction. Saving content without redaction.'
+      message: 'RG redaction scanner unavailable. Sensitive text was dropped, not saved.'
     }
     onRedactionWarning(warning)
     const initial = buildInitialCounts()
     return {
-      content: normalizedContent,
+      content: '',
       findings: initial.findings,
       ruleCounts: initial.ruleCounts,
       matchedRuleCounts: initial.matchedRuleCounts,
       matchedDropCategories: {},
-      dropContent: false,
-      dropReason: null,
+      dropContent: true,
+      dropReason: DROP_REASON_REDACTION_UNAVAILABLE,
       redactionBypassed: true
     }
   }
@@ -382,19 +390,19 @@ const scanAndRedactContent = async ({
       code: RG_WARNING_CODE,
       fileType,
       fileIdentifier,
-      message: 'RG redaction scan failed after retry. Saving content without redaction.',
+      message: 'RG redaction scan failed after retry. Sensitive text was dropped, not saved.',
       error: lastError?.message || String(lastError || '')
     }
     onRedactionWarning(warning)
     const initial = buildInitialCounts()
     return {
-      content: normalizedContent,
+      content: '',
       findings: initial.findings,
       ruleCounts: initial.ruleCounts,
       matchedRuleCounts: initial.matchedRuleCounts,
       matchedDropCategories: {},
-      dropContent: false,
-      dropReason: null,
+      dropContent: true,
+      dropReason: DROP_REASON_REDACTION_UNAVAILABLE,
       redactionBypassed: true
     }
   }

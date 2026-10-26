@@ -4,6 +4,7 @@ const {
 } = require('./storage')
 
 const DEFAULT_POLL_INTERVAL_MS = 500
+const REDACTION_RETRY_COOLDOWN_MS = 30 * 1000
 
 function noop() {}
 
@@ -27,6 +28,7 @@ function createClipboardMirror (options = {}) {
     ? Math.floor(options.pollIntervalMs)
     : DEFAULT_POLL_INTERVAL_MS
   const scheduler = options.scheduler || { setInterval, clearInterval }
+  const now = typeof options.now === 'function' ? options.now : Date.now
 
   const readTextImpl = typeof options.readTextImpl === 'function'
     ? options.readTextImpl
@@ -50,6 +52,7 @@ function createClipboardMirror (options = {}) {
   let timer = null
   let running = false
   let lastProcessedText = null
+  let redactionRetryAfterMs = 0
   let contextFolderPath = ''
   let sessionId = ''
 
@@ -63,6 +66,7 @@ function createClipboardMirror (options = {}) {
     }
     running = false
     lastProcessedText = null
+    redactionRetryAfterMs = 0
     contextFolderPath = ''
     sessionId = ''
   }
@@ -70,6 +74,9 @@ function createClipboardMirror (options = {}) {
   const tick = async () => {
     if (!running) {
       return { ok: true, skipped: true, reason: 'not-running' }
+    }
+    if (now() < redactionRetryAfterMs) {
+      return { ok: true, skipped: true, reason: 'redaction-cooldown' }
     }
 
     const text = readTextImpl()
@@ -97,7 +104,7 @@ function createClipboardMirror (options = {}) {
     }
 
     try {
-      const { path: savedPath } = await saveTextImpl({
+      const saved = await saveTextImpl({
         text,
         directory,
         date: new Date(),
@@ -105,9 +112,17 @@ function createClipboardMirror (options = {}) {
           onRedactionWarning
         }
       })
+      if (saved?.skipped) {
+        if (saved.reason === 'redaction-unavailable') {
+          redactionRetryAfterMs = now() + REDACTION_RETRY_COOLDOWN_MS
+        } else {
+          lastProcessedText = text
+        }
+        return { ok: true, skipped: true, reason: saved.reason }
+      }
       lastProcessedText = text
-      logger.log('Clipboard mirrored', { path: savedPath, sessionId })
-      return { ok: true, path: savedPath }
+      logger.log('Clipboard mirrored', { path: saved?.path, sessionId })
+      return { ok: true, path: saved?.path }
     } catch (error) {
       logger.error('Clipboard mirror write failed', { error, sessionId })
       return { ok: false, reason: 'write-failed', error }

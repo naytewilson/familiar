@@ -20,7 +20,7 @@ function createSessionStore({ contextFolderPath, format } = {}) {
   const sessionTimestamp = formatTimestamp(new Date());
   const sessionId = `session-${sessionTimestamp}`;
   const sessionDir = path.join(getStillsRoot(contextFolderPath), sessionId);
-  fs.mkdirSync(sessionDir, { recursive: true });
+  fs.mkdirSync(sessionDir, { recursive: true, mode: 0o700 });
 
   function nextCaptureFile(capturedAt = new Date()) {
     const timestamp = formatTimestamp(capturedAt);

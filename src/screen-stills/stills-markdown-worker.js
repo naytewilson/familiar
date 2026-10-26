@@ -17,6 +17,7 @@ const DEFAULT_BATCH_SIZE = 4
 const DEFAULT_MAX_BATCHES_PER_TICK = 10
 const DEFAULT_POLL_INTERVAL_MS = 5000
 const DEFAULT_REQUEUE_STALE_PROCESSING_AFTER_MS = 60 * 60 * 1000
+const REDACTION_RETRY_COOLDOWN_MS = 30 * 1000
 const noop = () => {}
 
 const defaultIsOnlineImpl = async () => {
@@ -57,7 +58,7 @@ const writeMarkdownFile = async ({
     throw new Error('Markdown content is required.')
   }
   const outputPath = resolveMarkdownPath({ contextFolderPath, imagePath })
-  await fs.mkdir(path.dirname(outputPath), { recursive: true })
+  await fs.mkdir(path.dirname(outputPath), { recursive: true, mode: 0o700 })
   const payload = markdown.endsWith('\n') ? markdown : `${markdown}\n`
   const redactionResult = await scanAndRedactContentImpl({
     content: payload,
@@ -65,24 +66,28 @@ const writeMarkdownFile = async ({
     fileIdentifier: outputPath,
     onRedactionWarning
   })
+  if (redactionResult.redactionBypassed) {
+    throw new RetryableError({
+      status: 'redaction-unavailable',
+      message: 'Stills OCR redaction unavailable; refusing to persist unscanned text.'
+    })
+  }
   if (redactionResult.dropContent) {
-    console.warn('Dropped still markdown due to sensitive payment detection', {
+    console.warn('Dropped still markdown due to sensitive-content detection', {
       outputPath,
       dropReason: redactionResult.dropReason,
       matchedDropCategories: redactionResult.matchedDropCategories
     })
     return null
   }
-  if (redactionResult.redactionBypassed) {
-    console.warn('Saved still markdown without redaction due to scanner issue', { outputPath })
-  } else if (redactionResult.findings > 0) {
+  if (redactionResult.findings > 0) {
     console.log('Redacted still markdown before save', {
       outputPath,
       findings: redactionResult.findings,
       ruleCounts: redactionResult.ruleCounts
     })
   }
-  await fs.writeFile(outputPath, redactionResult.content, 'utf-8')
+  await fs.writeFile(outputPath, redactionResult.content, { encoding: 'utf-8', mode: 0o600 })
   return outputPath
 }
 
@@ -99,13 +104,15 @@ const createStillsMarkdownWorker = ({
   writeMarkdownFileImpl = writeMarkdownFile,
   scanAndRedactContentImpl = scanAndRedactContent,
   onRedactionWarning = noop,
-  onFatalError = noop
+  onFatalError = noop,
+  clockNow = () => Date.now()
 } = {}) => {
   let running = false
   let contextFolderPath = ''
   let queueStore = null
   let timer = null
   let isProcessing = false
+  let redactionUnavailableUntilMs = 0
 
   const stop = () => {
     if (timer) {
@@ -175,19 +182,36 @@ const createStillsMarkdownWorker = ({
           continue
         }
 
-        const outputPath = await writeMarkdownFileImpl({
-          contextFolderPath,
-          imagePath: row.image_path,
-          markdown,
-          scanAndRedactContentImpl,
-          onRedactionWarning
-        })
+        if (clockNow() < redactionUnavailableUntilMs) {
+          queueStore.markPending({ id: row.id, error: 'redaction temporarily unavailable' })
+          continue
+        }
+        let outputPath
+        try {
+          outputPath = await writeMarkdownFileImpl({
+            contextFolderPath,
+            imagePath: row.image_path,
+            markdown,
+            scanAndRedactContentImpl,
+            onRedactionWarning
+          })
+        } catch (error) {
+          if (error instanceof RetryableError && error.status === 'redaction-unavailable') {
+            redactionUnavailableUntilMs = clockNow() + REDACTION_RETRY_COOLDOWN_MS
+            queueStore.markPending({ id: row.id, error: error.message })
+            logger.warn('Stills OCR redaction unavailable; queued for later retry', {
+              id: row.id, retryAfterMs: redactionUnavailableUntilMs
+            })
+            continue
+          }
+          throw error
+        }
         if (!outputPath) {
           queueStore.markFailed({
             id: row.id,
-            error: 'dropped-by-sensitive-payment-detection'
+            error: 'dropped-by-sensitive-content-detection'
           })
-          logger.warn('Dropped still markdown output due to sensitive payment detection', {
+          logger.warn('Dropped still markdown output due to sensitive-content detection', {
             id: row.id,
             imagePath: row.image_path
           })
@@ -224,7 +248,7 @@ const createStillsMarkdownWorker = ({
   }
 
   const processBatch = async () => {
-    if (!running || !queueStore || isProcessing) {
+    if (!running || !queueStore || isProcessing || clockNow() < redactionUnavailableUntilMs) {
       return
     }
     isProcessing = true

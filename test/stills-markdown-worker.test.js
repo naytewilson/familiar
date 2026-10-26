@@ -348,7 +348,7 @@ test('stills markdown worker marks frame failed when markdown is dropped by sens
   assert.equal(done.length, 0)
   assert.equal(failed.length, 1)
   assert.equal(failed[0].id, 1)
-  assert.equal(failed[0].error, 'dropped-by-sensitive-payment-detection')
+  assert.equal(failed[0].error, 'dropped-by-sensitive-content-detection')
 })
 
 test('stills markdown worker processes multiple batches per tick', async () => {

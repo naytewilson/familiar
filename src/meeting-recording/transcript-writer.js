@@ -290,16 +290,19 @@ function createTranscriptWriter ({
       fileIdentifier: `${transcriptMarkdownPath}:${eventType || 'event'}`,
       onRedactionWarning
     })
-    return redactionResult.content
+    if (redactionResult.redactionBypassed) {
+      throw new Error('Meeting transcript redaction unavailable; refusing to persist unscanned text.')
+    }
+    return redactionResult.dropContent ? '' : redactionResult.content
   }
 
   async function ensureInitialized () {
     if (initialized) {
       return
     }
-    await fs.mkdir(path.dirname(transcriptMarkdownPath), { recursive: true })
+    await fs.mkdir(path.dirname(transcriptMarkdownPath), { recursive: true, mode: 0o700 })
     if (!await fileHasContent(transcriptMarkdownPath)) {
-      await fs.writeFile(transcriptMarkdownPath, buildTranscriptHeader(), 'utf-8')
+      await fs.writeFile(transcriptMarkdownPath, buildTranscriptHeader(), { encoding: 'utf-8', mode: 0o600 })
     }
     initialized = true
   }
