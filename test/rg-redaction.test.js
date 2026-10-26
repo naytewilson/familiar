@@ -110,7 +110,7 @@ test('scanAndRedactContent redacts placeholder-like values in token assignments'
   }
 })
 
-test('scanAndRedactContent retries once and bypasses with warning when scanner keeps failing', async () => {
+test('scanAndRedactContent retries once and drops text with warning when scanner keeps failing', async () => {
   const { stubPath } = writeStubRgBinary({
     scriptBody: 'process.exit(2);'
   })
@@ -134,7 +134,9 @@ test('scanAndRedactContent retries once and bypasses with warning when scanner k
     })
 
     assert.equal(result.redactionBypassed, true)
-    assert.equal(result.content, 'api_key=sk-123456789012345678901234')
+    assert.equal(result.dropContent, true)
+    assert.equal(result.dropReason, 'redaction-scanner-unavailable')
+    assert.equal(result.content, '')
     assert.equal(warnings.length, 1)
     assert.equal(warnings[0].code, RG_WARNING_CODE)
     assert.equal(consoleWarnings.length >= 2, true)

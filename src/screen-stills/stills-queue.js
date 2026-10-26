@@ -57,9 +57,11 @@ const createStillsQueue = ({ contextFolderPath, logger = console } = {}) => {
   }
 
   const dbPath = resolveDbPath(contextFolderPath)
-  fs.mkdirSync(path.dirname(dbPath), { recursive: true })
+  fs.mkdirSync(path.dirname(dbPath), { recursive: true, mode: 0o700 })
+  fs.chmodSync(path.dirname(dbPath), 0o700)
 
   const db = new Database(dbPath)
+  fs.chmodSync(dbPath, 0o600)
   db.pragma('journal_mode = WAL')
   let enqueueCount = 0
 

@@ -11,6 +11,7 @@ const { createSessionStore } = require('./session-store');
 const { createStillsQueue } = require('./stills-queue');
 const { isSqliteCorruptError } = require('./stills-queue-archive');
 const { normalizeCapturePrivacySettings, shouldSkipCaptureForBlacklistedApps } = require('./capture-privacy');
+const { createCaptureDeduplicator } = require('./capture-deduplicator');
 const {
   createActiveWindowDetector,
   detectWindowSnapshot,
@@ -142,6 +143,9 @@ function createRecorder(options = {}) {
   let queueStore = null;
   let captureLoopIntervalMs = null;
   const activeWindowDetector = createActiveWindowDetectorImpl({ logger });
+  const captureDeduplicator = options.captureDeduplicator || createCaptureDeduplicator({
+    checkpointIntervalMs: options.checkpointIntervalMs
+  });
 
   function normalizeCapturedImageBuffer(value) {
     if (Buffer.isBuffer(value)) {
@@ -754,6 +758,7 @@ function createRecorder(options = {}) {
       };
       let beforeSnapshot = null;
       let afterSnapshot = null;
+      let captureDecision = null;
       const shouldDetectVisibleWindows = !IS_E2E_FAKE_CAPTURE || blacklistedApps.length > 0;
 
       if (shouldDetectVisibleWindows) {
@@ -788,6 +793,18 @@ function createRecorder(options = {}) {
       if (!IS_E2E_FAKE_CAPTURE) {
         const requestId = randomUUID();
         const activeSourceDetails = await ensureCaptureSource('capture-tick');
+        captureDecision = captureDeduplicator.evaluate({
+          thumbnailPng: activeSourceDetails.thumbnailPng,
+          sourceId: activeSourceDetails.sourceId,
+          displayId: activeSourceDetails.sourceDisplay?.id,
+          width: activeSourceDetails.captureWidth,
+          height: activeSourceDetails.captureHeight,
+          windowSnapshot: beforeSnapshot,
+          capturedAt
+        });
+        if (captureDecision.skip) {
+          return;
+        }
         const window = await ensureWindowReady();
         window.webContents.send('screen-stills:capture', {
           requestId,
@@ -865,10 +882,11 @@ function createRecorder(options = {}) {
       }
 
       await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
-      await fs.promises.writeFile(filePath, capturedImageBuffer);
+      await fs.promises.writeFile(filePath, capturedImageBuffer, { mode: 0o600 });
+      let enqueued = true;
       if (sessionStore && queueStore) {
         try {
-          queueStore.enqueueCapture({
+          enqueued = queueStore.enqueueCapture({
             imagePath: filePath,
             sessionId: sessionStore.sessionId,
             capturedAt: nextCapture.capturedAt,
@@ -879,11 +897,19 @@ function createRecorder(options = {}) {
             visibleWindowNames: captureAppContext.visibleWindowNames
           });
         } catch (error) {
+          enqueued = false;
           logger.error('Failed to enqueue still capture', { error, filePath });
           if (isSqliteCorruptError(error)) {
             throw error;
           }
         }
+      }
+      if (enqueued !== false) {
+        captureDeduplicator.markSaved(captureDecision?.candidate, {
+          beforeSnapshot,
+          afterSnapshot,
+          reason: captureDecision?.reason
+        });
       }
     } finally {
       captureInProgress = false;
@@ -934,6 +960,7 @@ function createRecorder(options = {}) {
           format: CAPTURE_CONFIG.format
         });
         const startedSessionStore = sessionStore;
+        captureDeduplicator.reset();
         queueStore = createStillsQueue({ contextFolderPath, logger });
 
         logger.log('Recording session started', { sessionDir: startedSessionStore.sessionDir });
@@ -1014,7 +1041,11 @@ function createRecorder(options = {}) {
         queueStore = null;
       }
       lowPowerModeMonitor.stop();
-      logger.log('Recording session stopped', { reason: stopReason });
+      logger.log('Recording session stopped', {
+        reason: stopReason,
+        captureStats: captureDeduplicator.getStats()
+      });
+      captureDeduplicator.reset();
 
       if (!sessionStore && !captureWindow) {
         return { ok: true, alreadyStopped: true };
@@ -1080,7 +1111,8 @@ function createRecorder(options = {}) {
 
   return {
     start,
-    stop
+    stop,
+    getCaptureStats: () => captureDeduplicator.getStats()
   };
 }
 

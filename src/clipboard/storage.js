@@ -46,7 +46,7 @@ async function saveClipboardMirrorToDirectory ({
     throw new Error('Clipboard mirror directory is missing.')
   }
 
-  await fs.mkdir(directory, { recursive: true })
+  await fs.mkdir(directory, { recursive: true, mode: 0o700 })
   const filename = buildClipboardMirrorFilename(date)
   const fullPath = path.join(directory, filename)
   const redactionResult = await scanAndRedactContentImpl({
@@ -55,16 +55,24 @@ async function saveClipboardMirrorToDirectory ({
     fileIdentifier: fullPath,
     onRedactionWarning
   })
-  if (redactionResult.redactionBypassed) {
-    console.warn('Saved clipboard mirror without redaction due to scanner issue', { fullPath })
-  } else if (redactionResult.findings > 0) {
+  if (redactionResult.redactionBypassed || redactionResult.dropContent) {
+    return {
+      skipped: true,
+      path: null,
+      filename: null,
+      reason: redactionResult.redactionBypassed
+        ? 'redaction-unavailable'
+        : (redactionResult.dropReason || 'sensitive-content-dropped')
+    }
+  }
+  if (redactionResult.findings > 0) {
     console.log('Redacted clipboard text before save', {
       fullPath,
       findings: redactionResult.findings,
       ruleCounts: redactionResult.ruleCounts
     })
   }
-  await fs.writeFile(fullPath, redactionResult.content, 'utf-8')
+  await fs.writeFile(fullPath, redactionResult.content, { encoding: 'utf-8', mode: 0o600 })
   return { path: fullPath, filename }
 }
 
