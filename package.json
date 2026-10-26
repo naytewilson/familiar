@@ -34,7 +34,7 @@
     "dev:replay-wizard": "node scripts/dev-reset-wizard.js && npm run dev",
     "dev:fresh-loop": "bash scripts/dev-fresh-loop.sh"
   },
-  "repository": "https://github.com/familiar-software/familiar",
+  "repository": "https://github.com/naytewilson/familiar",
   "keywords": [
     "Electron",
     "menu bar",
@@ -42,12 +42,12 @@
     "Familiar"
   ],
   "build": {
-    "appId": "com.familiar.familiar-desktop",
-    "productName": "Familiar",
+    "appId": "com.nayte.familiar-anvil",
+    "productName": "Familiar ANVIL",
     "publish": [
       {
         "provider": "github",
-        "owner": "familiar-software",
+        "owner": "naytewilson",
         "repo": "familiar",
         "releaseType": "release"
       }

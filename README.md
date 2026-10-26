@@ -16,7 +16,9 @@
 
 ---
 
-We created Familiar to capture our screen (and clipboard) every 4 seconds and save it as markdown. That way our local agent can use that as context (through a cron, skill, or slash command).
+This ANVIL fork samples the screen every 5 seconds (15 seconds in macOS Low Power Mode) and converts changed observations to Markdown. Identical screen bytes and unchanged window context are deduplicated before WebP encoding, disk writes, and OCR, with a 30-second checkpoint. A changed screen or window is still captured at the original sampling cadence. The local agent can consume this context through a skill or scheduled task.
+
+**ANVIL low-wear engineering:** See [docs/ANVIL_LOW_WEAR.md](./docs/ANVIL_LOW_WEAR.md) for the source-level optimization contract, privacy behavior, test results, and remaining native qualification.
 
 ## Use Familiar with your favorite agent
 
@@ -49,7 +51,7 @@ Familiar is our "bitter lesson" version: just hand over context and get out of t
 
 ## Privacy
 
-Familiar uses Apple's native OCR, deletes screenshot images after 48 hours, and redacts passwords/credit card numbers/SSNs/API tokens/etc. We'd love contributions on what else to block: https://github.com/familiar-software/familiar/tree/main/src/ or in general ways to improve privacy.
+Familiar uses Apple's native OCR, deletes screenshot images after 2 days by default (configurable to 7 days), and redacts passwords/credit card numbers/SSNs/API tokens/etc. Raw screenshots remain local and are not pixel-redacted; sensitive applications can be excluded before capture. We'd love contributions on what else to block: https://github.com/familiar-software/familiar/tree/main/src/ or in general ways to improve privacy.
 
 
 ## Additional Details
@@ -58,7 +60,7 @@ Familiar uses Apple's native OCR, deletes screenshot images after 48 hours, and 
 - Captured still images: `<contextFolderPath>/familiar/stills/`
 - Extracted markdown for captured still images: `<contextFolderPath>/familiar/stills-markdown/`
 - Clipboard text mirrors while recording: `<contextFolderPath>/familiar/stills-markdown/<sessionId>/<timestamp>.clipboard.txt`
-- Before still markdown and clipboard text are written, Familiar runs `rg`-based redaction for password/API-key patterns. If the scanner fails twice, Familiar still saves the file and shows a one-time warning toast per recording session.
+- Before still Markdown, clipboard text, and meeting transcripts are written, Familiar runs `rg`-based redaction for sensitive text. In this fork, unavailable or failing redaction drops unscanned text instead of saving it. Stills OCR is retried after a short cooldown; clipboard capture retries after a cooldown.
 - Meeting recording is started and stopped from the tray menu. It streams transcript events from the
   local Apple SpeechTranscriber helper into
   `<contextFolderPath>/familiar/stills-markdown/<sessionId>/<timestamp>.transcript.md`. The
@@ -117,7 +119,7 @@ installed Apple SpeechTranscriber asset. The BlackHole route additionally requir
 ## Build locally
 
 ```bash
-git clone https://github.com/familiar-software/familiar.git
+git clone https://github.com/naytewilson/familiar.git
 cd familiar
 npm install
 npm run dist:mac
